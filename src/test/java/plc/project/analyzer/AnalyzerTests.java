@@ -1,13 +1,11 @@
 package plc.project.analyzer;
 
 import org.junit.jupiter.api.Assertions;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import plc.project.lexer.Lexer;
 import plc.project.parser.Ast;
-import plc.project.parser.ParseException;
 import plc.project.parser.Parser;
 
 import java.math.BigDecimal;
@@ -27,11 +25,6 @@ final class AnalyzerTests {
     public sealed interface Input {
         record Ast(plc.project.parser.Ast ast) implements Input {}
         record Program(String program) implements Input {}
-    }
-
-    @Test
-    void haveTestsBeenVerifiedYet() {
-        throw new AssertionError("no.");
     }
 
     @ParameterizedTest
@@ -75,8 +68,8 @@ final class AnalyzerTests {
                     new Ast.Stmt.Expression(new Ast.Expr.Variable("name"))
                 ))),
                 new Ir.Source(List.of(
-                    new Ir.Stmt.Let("name", Type.ANY, Optional.empty()),
-                    new Ir.Stmt.Expression(new Ir.Expr.Variable("name", Type.ANY))
+                    new Ir.Stmt.Let("name", Type.DYNAMIC, Optional.empty()),
+                    new Ir.Stmt.Expression(new Ir.Expr.Variable("name", Type.DYNAMIC))
                 ))
             ),
             Arguments.of("Declaration Type",
@@ -111,7 +104,7 @@ final class AnalyzerTests {
             ),
             Arguments.of("Initialization Type Invalid",
                 new Input.Ast(new Ast.Source(List.of(
-                    new Ast.Stmt.Let("name", Optional.of("Comparable"), Optional.of(new Ast.Expr.Literal(null)))
+                    new Ast.Stmt.Let("name", Optional.of("Undefined"), Optional.of(new Ast.Expr.Literal(null)))
                 ))),
                 null //AnalyzeException
             ),
@@ -139,8 +132,8 @@ final class AnalyzerTests {
                     new Ast.Stmt.Expression(new Ast.Expr.Function("name", List.of()))
                 ))),
                 new Ir.Source(List.of(
-                    new Ir.Stmt.Def("name", List.of(), Type.ANY, List.of()),
-                    new Ir.Stmt.Expression(new Ir.Expr.Function("name", List.of(), Type.ANY))
+                    new Ir.Stmt.Def("name", List.of(), Type.DYNAMIC, List.of()),
+                    new Ir.Stmt.Expression(new Ir.Expr.Function("name", List.of(), Type.DYNAMIC))
                 ))
             ),
             Arguments.of("Parameter Type",
@@ -151,10 +144,10 @@ final class AnalyzerTests {
                     new Ast.Stmt.Expression(new Ast.Expr.Function("name", List.of(new Ast.Expr.Literal("argument"))))
                 ))),
                 new Ir.Source(List.of(
-                    new Ir.Stmt.Def("name", List.of(new Ir.Stmt.Def.Parameter("parameter", Type.STRING)), Type.ANY, List.of(
+                    new Ir.Stmt.Def("name", List.of(new Ir.Stmt.Def.Parameter("parameter", Type.STRING)), Type.DYNAMIC, List.of(
                         new Ir.Stmt.Expression(new Ir.Expr.Variable("parameter", Type.STRING))
                     )),
-                    new Ir.Stmt.Expression(new Ir.Expr.Function("name", List.of(new Ir.Expr.Literal("argument", Type.STRING)), Type.ANY))
+                    new Ir.Stmt.Expression(new Ir.Expr.Function("name", List.of(new Ir.Expr.Literal("argument", Type.STRING)), Type.DYNAMIC))
                 ))
             ),
             //Duplicated in testReturnStmt, but is part of the spec for Def.
@@ -208,8 +201,8 @@ final class AnalyzerTests {
                 new Ir.Source(List.of(
                     new Ir.Stmt.If(
                         new Ir.Expr.Literal(false, Type.BOOLEAN),
-                        List.of(new Ir.Stmt.Let("name", Type.ANY, Optional.empty())),
-                        List.of(new Ir.Stmt.Let("name", Type.ANY, Optional.empty()))
+                        List.of(new Ir.Stmt.Let("name", Type.DYNAMIC, Optional.empty())),
+                        List.of(new Ir.Stmt.Let("name", Type.DYNAMIC, Optional.empty()))
                     )
                 ))
             )
@@ -434,6 +427,21 @@ final class AnalyzerTests {
                     Type.STRING
                 )
             ),
+            Arguments.of("Op+ Dynamic Left",
+                new Input.Ast(
+                    new Ast.Expr.Binary(
+                        "+",
+                        new Ast.Expr.Variable("dynamic"),
+                        new Ast.Expr.Literal(new BigInteger("1"))
+                    )
+                ),
+                new Ir.Expr.Binary(
+                    "+",
+                    new Ir.Expr.Variable("dynamic", Type.DYNAMIC),
+                    new Ir.Expr.Literal(new BigInteger("1"), Type.INTEGER),
+                    Type.INTEGER
+                )
+            ),
             Arguments.of("Op< Integer",
                 new Input.Ast(
                     new Ast.Expr.Binary(
@@ -519,6 +527,7 @@ final class AnalyzerTests {
     private static Stream<Arguments> testPropertyExpr() {
         return Stream.of(
             Arguments.of("Property",
+                //Note: Ensure Environment has been updated to defined object.property (String)
                 new Input.Ast(
                     new Ast.Expr.Property(
                         new Ast.Expr.Variable("object"),
@@ -530,6 +539,28 @@ final class AnalyzerTests {
                     "property",
                     Type.STRING
                 )
+            ),
+            Arguments.of("Dynamic",
+                new Input.Ast(
+                    new Ast.Expr.Property(
+                        new Ast.Expr.Variable("dynamic"),
+                        "property"
+                    )
+                ),
+                new Ir.Expr.Property(
+                    new Ir.Expr.Variable("dynamic", Type.DYNAMIC),
+                    "property",
+                    Type.DYNAMIC
+                )
+            ),
+            Arguments.of("Undefined",
+                new Input.Ast(
+                    new Ast.Expr.Property(
+                        new Ast.Expr.Variable("object"),
+                        "undefined"
+                    )
+                ),
+                null //AnalyzeException
             )
         );
     }
@@ -659,12 +690,12 @@ final class AnalyzerTests {
                     new Ir.Expr.ObjectExpr(
                         Optional.empty(),
                         List.of(),
-                        List.of(new Ir.Stmt.Def("method", List.of(), Type.ANY, List.of())),
-                        createObjectType.apply(Map.of("method", new Type.Function(List.of(), Type.ANY)))
+                        List.of(new Ir.Stmt.Def("method", List.of(), Type.DYNAMIC, List.of())),
+                        createObjectType.apply(Map.of("method", new Type.Function(List.of(), Type.DYNAMIC)))
                     ),
                     "method",
                     List.of(),
-                    Type.ANY
+                    Type.DYNAMIC
                 )
             )
         );
@@ -688,10 +719,10 @@ final class AnalyzerTests {
                     main();
                     """),
                 new Ir.Source(List.of(
-                    new Ir.Stmt.Def("main", List.of(), Type.ANY, List.of(
+                    new Ir.Stmt.Def("main", List.of(), Type.DYNAMIC, List.of(
                         new Ir.Stmt.Expression(new Ir.Expr.Function("print", List.of(new Ir.Expr.Literal("Hello, World!", Type.STRING)), Type.NIL)
-                    ))),
-                    new Ir.Stmt.Expression(new Ir.Expr.Function("main", List.of(), Type.ANY))
+                        ))),
+                    new Ir.Stmt.Expression(new Ir.Expr.Function("main", List.of(), Type.DYNAMIC))
                 ))
             )
         );
@@ -699,14 +730,14 @@ final class AnalyzerTests {
 
     @ParameterizedTest
     @MethodSource
-    void testRequireSubtype(String test, Type type, Type other, boolean expected) {
+    void testIsSubtypeOf(String test, Type type, Type other, boolean expected) {
         Assertions.assertEquals(expected, type.isSubtypeOf(other), "Expected " + type + " to " + (expected ? "" : "not ") + "be a subtype of " + other + ".");
     }
 
-    public static Stream<Arguments> testRequireSubtype() {
+    public static Stream<Arguments> testIsSubtypeOf() {
         return Stream.of(
             Arguments.of("Equal", Type.STRING, Type.STRING, true),
-            Arguments.of("Disjoint", Type.INTEGER, Type.DECIMAL, true),
+            Arguments.of("Disjoint", Type.INTEGER, Type.DECIMAL, false),
             Arguments.of("Subtype", Type.STRING, Type.ANY, true),
             Arguments.of("Supertype", Type.ANY, Type.STRING, false),
             Arguments.of("Nil Equal", Type.NIL, Type.NIL, true),

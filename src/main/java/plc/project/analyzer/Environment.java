@@ -50,6 +50,7 @@ public final class Environment {
         var object = new Type.ObjectType(Optional.of("Object"), new Scope(null));
         scope.define("object", object);
         object.scope().define("prototype", prototype);
+        object.scope().define("property", Type.STRING);
         object.scope().define("method", new Type.Function(List.of(), Type.NIL));
         object.scope().define("methodAny", new Type.Function(List.of(Type.ANY), Type.ANY));
         object.scope().define("methodString", new Type.Function(List.of(Type.STRING), Type.STRING));
@@ -57,33 +58,40 @@ public final class Environment {
     }
 
     public static boolean isSubtypeOf(Type subtype, Type supertype) {
-        if(supertype.equals(Type.ANY)){
-            return true;
-        }
-        if(supertype.equals(Type.DYNAMIC) || subtype.equals(Type.DYNAMIC)){
-            return true;
-        }
-        if(supertype.equals(subtype)){
-            return true;
-        }
-        if ((subtype.equals(Type.INTEGER) && supertype.equals(Type.DECIMAL)) ||
-            (subtype.equals(Type.DECIMAL) && supertype.equals(Type.INTEGER))) {
-            return true;
-        }
-        if (supertype.equals(Type.COMPARABLE)) {
-            return
-                subtype.equals(Type.BOOLEAN)   ||
-                    subtype.equals(Type.INTEGER)   ||
-                    subtype.equals(Type.DECIMAL)   ||
-                    subtype.equals(Type.CHARACTER) ||
-                    subtype.equals(Type.STRING);
-        }
+        if (supertype.equals(Type.ANY)) return true;
 
+        if (subtype.equals(supertype)) return true;
+
+        if (subtype.equals(Type.DYNAMIC) || supertype.equals(Type.DYNAMIC)) return true;
+
+        if (supertype.equals(Type.COMPARABLE)) {
+            return subtype.equals(Type.BOOLEAN)
+                || subtype.equals(Type.INTEGER)
+                || subtype.equals(Type.DECIMAL)
+                || subtype.equals(Type.CHARACTER)
+                || subtype.equals(Type.STRING);
+        }
         if (supertype.equals(Type.EQUATABLE)) {
-            return subtype.equals(Type.NIL)
-                || isSubtypeOf(subtype, Type.COMPARABLE)
-                || subtype.equals(Type.ITERABLE);
+            if (subtype.equals(Type.NIL) || subtype.equals(Type.ITERABLE)) return true;
+            return isSubtypeOf(subtype, Type.COMPARABLE);
+        }
+        if (subtype instanceof Type.ObjectType s &&
+            supertype instanceof Type.ObjectType t) {
+            Type.ObjectType after = s;
+
+            for (;;) {
+                var Prox = after.scope().resolve("prototype", false);
+                if (Prox.isEmpty()) break;
+
+                var val = Prox.get();
+                if (!(val instanceof Type.ObjectType o)) break;
+
+                if (o.equals(t)) return true;
+
+                after = o;
+            }
         }
         return false;
     }
+
 }

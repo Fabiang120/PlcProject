@@ -1,6 +1,7 @@
 package plc.project.analyzer;
 
 import plc.project.evaluator.EvaluateException;
+import plc.project.evaluator.Evaluator;
 import plc.project.evaluator.RuntimeValue;
 import plc.project.parser.Ast;
 
@@ -64,13 +65,13 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
         Type variableType =
             declaredType != null ? declaredType :
                 valueType != null ? valueType :
-                    Type.ANY;
+                    Type.DYNAMIC;
 
         if (declaredType != null && valueType != null) {
             if (!valueType.isSubtypeOf(declaredType)) {
                 throw new AnalyzeException(
                     "Value type does not match declared type.",
-                    Optional.of(ast)
+                    Optional.of(ast.value().get())
                 );
             }
         }
@@ -90,7 +91,50 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Stmt.Def visit(Ast.Stmt.Def ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        if (scope.resolve(ast.name(), false).isPresent()) {
+            throw new AnalyzeException("Function already defined.", Optional.of(ast));
+        }
+
+        List<Type> paramTypes = new ArrayList<>();
+        for (int i = 0; i < ast.parameters().size(); i++) {
+            if (ast.parameterTypes().get(i).isPresent()) {
+                paramTypes.add(resolveTypeName(ast.parameterTypes().get(i).get()));
+            } else {
+                paramTypes.add(Type.DYNAMIC);
+            }
+        }
+
+        Type returnType = ast.returnType().isPresent()
+            ? resolveTypeName(ast.returnType().get())
+            : Type.DYNAMIC;
+
+        List<Ir.Stmt.Def.Parameter> irParams = new ArrayList<>();
+        for (int i = 0; i < ast.parameters().size(); i++) {
+            irParams.add(new Ir.Stmt.Def.Parameter(
+                ast.parameters().get(i),
+                paramTypes.get(i)
+            ));
+        }
+
+        scope.define(ast.name(), new Type.Function(paramTypes, returnType));
+
+        Scope previous = scope;
+        scope = new Scope(previous);
+
+        for (int i = 0; i < ast.parameters().size(); i++) {
+            scope.define(ast.parameters().get(i), paramTypes.get(i));
+        }
+
+        scope.define("$RETURN", returnType);
+
+        List<Ir.Stmt> bodyIr = new ArrayList<>();
+        for (var stmt : ast.body()) {
+            bodyIr.add(visit(stmt));
+        }
+
+        scope = previous;
+
+        return new Ir.Stmt.Def(ast.name(), irParams, returnType, bodyIr);
     }
 
     @Override
@@ -134,12 +178,45 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Stmt.For visit(Ast.Stmt.For ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        Ir.Expr iterableValue = visit(ast.expression());
+        Type iterableType = iterableValue.type();
+        if (iterableValue.type().equals(Type.NIL)) {
+            throw new AnalyzeException("Expression must be iterable", Optional.of(ast.expression()));
+        }
+        Scope previous = scope;
+        scope = new Scope(previous);
+        scope.define(ast.name(), Type.INTEGER);
+        List<Ir.Stmt> bodyIr = new ArrayList<>();
+        for(var stmt: ast.body()){
+            bodyIr.add(visit(stmt));
+        }
+        scope = previous;
+        return new Ir.Stmt.For(ast.name(),Type.INTEGER,iterableValue,bodyIr);
+
+
     }
 
     @Override
     public Ir.Stmt.Return visit(Ast.Stmt.Return ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        Type inside = scope.resolve("$RETURN", true)
+            .orElseThrow(() -> new AnalyzeException("RETURN outside function", Optional.of(ast)));
+
+        Optional<Ir.Expr> valueIr = ast.value().isPresent()
+            ? Optional.of(visit(ast.value().get()))
+            : Optional.empty();
+
+        Type actual = valueIr.isPresent() ? valueIr.get().type() : Type.NIL;
+
+        if (!actual.isSubtypeOf(inside)) {
+            if (ast.value().isPresent()) {
+                throw new AnalyzeException("Return type mismatch",
+                    Optional.of(ast.value().get()));
+            }
+            throw new AnalyzeException("Return type mismatch",
+                Optional.of(ast));
+        }
+
+        return new Ir.Stmt.Return(valueIr);
     }
 
     @Override
@@ -153,11 +230,12 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
         if (ast.expression() instanceof Ast.Expr.Variable variable) {
             Optional<Type> existing = scope.resolve(variable.name(), false);
             if (existing.isEmpty()) {
-                throw new AnalyzeException("Variable doesnt exist", Optional.of(ast));
+                throw new AnalyzeException("Variable doesnt exist",
+                    Optional.of(variable));
             }
             Ir.Expr right = visit(ast.value());
             if (!right.type().isSubtypeOf(existing.get())) {
-                throw new AnalyzeException("Type mismatch in assignment", Optional.of(ast));
+                throw new AnalyzeException("Type mismatch in assignment", Optional.of(ast.value()));
             }
             Ir.Expr.Variable left = new Ir.Expr.Variable(
                 variable.name(),
@@ -170,14 +248,14 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
             if (!(type instanceof Type.ObjectType
                 || type == Type.DYNAMIC)) {
-                throw new AnalyzeException("Invalid property receiver", Optional.of(ast));
+                throw new AnalyzeException("Invalid property receiver", Optional.of(property.receiver()));
             }
 
             Type actualtype = Type.DYNAMIC;
             if (type instanceof Type.ObjectType objectType) {
                 Optional<Type> resolved = objectType.scope().resolve(property.name(), true);
                 if (resolved.isEmpty()) {
-                    throw new AnalyzeException("Invalid property receiver", Optional.of(ast));
+                    throw new AnalyzeException("Invalid property receiver", Optional.of(property));
                 }
                 actualtype = resolved.get();
             }
@@ -326,7 +404,26 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Expr.Property visit(Ast.Expr.Property ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        Ir.Expr receiver = visit(ast.receiver());
+        Type receiverType = receiver.type();
+
+        Type propType;
+
+        if (receiverType instanceof Type.ObjectType obj) {
+            var resolved = obj.scope().resolve(ast.name(), true);
+            if (resolved.isEmpty()) {
+                throw new AnalyzeException("Property '" + ast.name() + "' not defined on object (direct properties only)", Optional.of(ast));
+            }
+            propType = resolved.get();
+
+        } else if (receiverType.equals(Type.DYNAMIC)) {
+            propType = Type.DYNAMIC;
+
+        } else {
+            throw new AnalyzeException("Property access is not right type", Optional.of(ast));
+        }
+
+        return new Ir.Expr.Property(receiver, ast.name(), propType);
     }
 
     @Override
@@ -361,12 +458,135 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Expr.Method visit(Ast.Expr.Method ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
+        Ir.Expr receiver = visit(ast.receiver());
+        Type receiver_type = receiver.type();
+        Type propertyType;
+
+        if (receiver_type instanceof Type.ObjectType object_ins) {
+            propertyType = object_ins.scope().resolve(ast.name(), true)
+                .orElseThrow(() -> new AnalyzeException("Property not found", Optional.of(ast)));
+        } else if (receiver_type == Type.DYNAMIC) {
+            propertyType = Type.DYNAMIC;
+        } else {
+            throw new AnalyzeException("Invalid property receiver",
+                Optional.of(ast.receiver()));
+        }
+        List<Ir.Expr> arguments = new ArrayList<>();
+        for(Ast.Expr argument : ast.arguments()){
+            arguments.add(visit(argument));
+        }
+        if(propertyType instanceof Type.Function function){
+            if(function.parameters().size() != arguments.size()){
+                throw new AnalyzeException("Arguments don't match" + ast.name(), Optional.of(ast));
+            }
+            for (int i = 0; i < arguments.size(); i++) {
+                if (!Environment.isSubtypeOf(arguments.get(i).type(), function.parameters().get(i))) {
+                    throw new AnalyzeException("Argument type mismatch", Optional.of(ast.arguments().get(i)));
+                }
+            }
+            return new Ir.Expr.Method(receiver, ast.name(), arguments, function.returns());
+        }
+        return new Ir.Expr.Method(receiver,ast.name(), arguments, Type.DYNAMIC);
     }
 
     @Override
     public Ir.Expr.ObjectExpr visit(Ast.Expr.ObjectExpr ast) throws AnalyzeException {
-        throw new UnsupportedOperationException("TODO"); //TODO
-    }
+        Type.ObjectType object_type = new Type.ObjectType(Optional.empty(), new Scope(null));
+        final Scope definingScope = object_type.scope();
+        Scope previous = this.scope;
+        this.scope = object_type.scope();
+        List<Ir.Stmt.Let> lets = new ArrayList<>();
+        List<Ir.Stmt.Def> defs = new ArrayList<>();
+        try {
+            for (var letstmt : ast.fields()) {
+                if (object_type.scope().resolve(letstmt.name(), true).isPresent()) {
+                    throw new AnalyzeException(
+                        "Variable '" + ast.name() + "' is already defined in this scope.",
+                        Optional.of(ast)
+                    );
+                }
 
+                Type declaredType = null;
+                if (letstmt.type().isPresent()) {
+                    declaredType = resolveTypeName(letstmt.type().get());
+                }
+
+                Optional<Ir.Expr> irValue = Optional.empty();
+                Type valueType = null;
+
+                if (letstmt.value().isPresent()) {
+                    Ir.Expr val = visit(letstmt.value().get());
+                    irValue = Optional.of(val);
+                    valueType = val.type();
+                }
+
+                Type variableType =
+                    declaredType != null ? declaredType :
+                        valueType != null ? valueType :
+                            Type.DYNAMIC;
+
+                if (declaredType != null && valueType != null) {
+                    if (!valueType.isSubtypeOf(declaredType)) {
+                        throw new AnalyzeException(
+                            "Value type does not match declared type.",
+                            Optional.of(ast)
+                        );
+                    }
+                }
+
+                scope.define(letstmt.name(), variableType);
+                lets.add(new Ir.Stmt.Let(letstmt.name(), variableType, irValue));
+            }
+
+            for (var defstmt : ast.methods()) {
+                if (object_type.scope().resolve(defstmt.name(), true).isPresent()) {
+                    throw new AnalyzeException("Function already defined.", Optional.of(ast));
+                }
+
+                List<Type> paramTypes = new ArrayList<>();
+                for (int i = 0; i < defstmt.parameters().size(); i++) {
+                    if (defstmt.parameterTypes().get(i).isPresent()) {
+                        paramTypes.add(resolveTypeName(defstmt.parameterTypes().get(i).get()));
+                    } else {
+                        paramTypes.add(Type.DYNAMIC);
+                    }
+                }
+
+                Type returnType =
+                    defstmt.returnType().isPresent()
+                        ? resolveTypeName(defstmt.returnType().get())
+                        : Type.DYNAMIC;
+
+                List<Ir.Stmt.Def.Parameter> irParams = new ArrayList<>();
+                for (int i = 0; i < defstmt.parameters().size(); i++) {
+                    irParams.add(new Ir.Stmt.Def.Parameter(
+                        defstmt.parameters().get(i),
+                        paramTypes.get(i)
+                    ));
+                }
+
+                scope.define(defstmt.name(), new Type.Function(paramTypes, returnType));
+                Scope previous2 = scope;
+                scope = new Scope(previous2);
+
+                for (int i = 0; i < defstmt.parameters().size(); i++) {
+                    scope.define(defstmt.parameters().get(i), paramTypes.get(i));
+                }
+                scope.define("$RETURN", returnType);
+
+                List<Ir.Stmt> bodyIr = new ArrayList<>();
+                for (var stmt : defstmt.body()) {
+                    bodyIr.add(visit(stmt));
+                }
+
+                scope = previous2;
+                defs.add(new Ir.Stmt.Def(defstmt.name(), irParams, returnType, bodyIr));
+            }
+
+        } finally {
+            this.scope = previous;
+        }
+
+        return new Ir.Expr.ObjectExpr(Optional.empty(), lets, defs, object_type);
+    }
 }
