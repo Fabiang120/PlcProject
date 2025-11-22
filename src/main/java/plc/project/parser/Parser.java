@@ -192,30 +192,26 @@ public final class Parser {
 
     private Ast.Stmt parseReturnStmt() throws ParseException {
         tokens.match("RETURN");
+        Optional<Ast.Expr> value = Optional.empty();
+        Optional<Ast.Expr> cond = Optional.empty();
 
-
+        if (!tokens.peek("IF") && !tokens.peek(";")) {
+            value = Optional.of(parseExpr());
+        }
         if (tokens.match("IF")) {
-            Ast.Expr expr1 = parseExpr();
-            if (!tokens.match(";")) {
-                throw new ParseException("Expected ';' after RETURN IF condition", tokens.getNext());
-            }
-            return new Ast.Stmt.If(
-                expr1,
-                List.of(new Ast.Stmt.Return(Optional.empty())),
-                List.of()
-            );
+            cond = Optional.of(parseExpr());
         }
-
-        Optional<Ast.Expr> expr2 = Optional.empty();
-        if (!tokens.peek(";")) {
-            expr2 = Optional.of(parseExpr());
-        }
-
         if (!tokens.match(";")) {
-            throw new ParseException("Expected ';' after RETURN statement", tokens.getNext());
+            throw new ParseException("Expected ';' after RETURN", tokens.getNext());
         }
-
-        return new Ast.Stmt.Return(expr2);
+        if (cond.isEmpty()) {
+            return new Ast.Stmt.Return(value);
+        }
+        return new Ast.Stmt.If(
+            cond.get(),
+            List.of(new Ast.Stmt.Return(value)),
+            List.of()
+        );
     }
 
 
@@ -370,15 +366,37 @@ public final class Parser {
             String raw = tokens.get(-1).literal();
             String inner = raw.substring(1, raw.length() - 1);
 
-            inner = inner
-                .replace("\\n", "\n")
-                .replace("\\t", "\t")
-                .replace("\\r", "\r")
-                .replace("\\\"", "\"")
-                .replace("\\'", "'")
-                .replace("\\\\", "\\");
+            StringBuilder stringbuild = new StringBuilder();
 
-            return new Ast.Expr.Literal(inner);
+            for (int i = 0; i < inner.length(); i++) {
+                char c = inner.charAt(i);
+
+                if (c == '\\') {
+                    if (i + 1 >= inner.length()) {
+                        throw new ParseException("Invalid escape", tokens.getNext());
+                    }
+                    char e = inner.charAt(++i);
+
+                    switch (e) {
+                        case 'n' -> stringbuild.append('\n');
+                        case 't' -> stringbuild.append('\t');
+                        case 'r' -> stringbuild.append('\r');
+                        case 'b' -> stringbuild.append('\b');
+                        case 'f' -> stringbuild.append('\f');
+                        case '\\' -> stringbuild.append('\\');
+                        case '\'' -> stringbuild.append('\'');
+                        case '"' -> stringbuild.append('"');
+                        default -> {
+                            stringbuild.append('\\');
+                            stringbuild.append(e);
+                        }
+                    }
+                } else {
+                    stringbuild.append(c);
+                }
+            }
+
+            return new Ast.Expr.Literal(stringbuild.toString());
         }
         throw new ParseException("Expected literal", tokens.getNext());
     }
@@ -410,13 +428,18 @@ public final class Parser {
         List<Ast.Stmt.Let> fields = new ArrayList<>();
         List<Ast.Stmt.Def> methods = new ArrayList<>();
 
+        boolean sawMethod = false;
         while (tokens.has(0) && !tokens.peek("END")) {
             if (tokens.peek("LET")) {
+                if (sawMethod) {
+                    throw new ParseException("Fields cannot appear after methods", tokens.getNext());
+                }
                 fields.add((Ast.Stmt.Let) parseLetStmt());
             } else if (tokens.peek("DEF")) {
+                sawMethod = true;
                 methods.add((Ast.Stmt.Def) parseDefStmt());
             } else {
-                break;
+                throw new ParseException("Unexpected statement in object literal", tokens.getNext());
             }
         }
 

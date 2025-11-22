@@ -180,7 +180,7 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
     public Ir.Stmt.For visit(Ast.Stmt.For ast) throws AnalyzeException {
         Ir.Expr iterableValue = visit(ast.expression());
         Type iterableType = iterableValue.type();
-        if (iterableValue.type().equals(Type.NIL)) {
+        if (!Environment.isSubtypeOf(iterableType, Type.ITERABLE)) {
             throw new AnalyzeException("Expression must be iterable", Optional.of(ast.expression()));
         }
         Scope previous = scope;
@@ -568,6 +568,7 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
                 scope.define(defstmt.name(), new Type.Function(paramTypes, returnType));
                 Scope previous2 = scope;
                 scope = new Scope(previous2);
+                scope.define("this", object_type);
 
                 for (int i = 0; i < defstmt.parameters().size(); i++) {
                     scope.define(defstmt.parameters().get(i), paramTypes.get(i));

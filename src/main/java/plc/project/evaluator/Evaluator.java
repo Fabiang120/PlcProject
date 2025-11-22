@@ -5,10 +5,7 @@ import plc.project.parser.Ast;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Optional;
+import java.util.*;
 
 public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateException> {
 
@@ -55,6 +52,12 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
     @Override
     public RuntimeValue visit(Ast.Stmt.Def ast) throws EvaluateException {
+        var seen = new HashSet<String>();
+        for (String param : ast.parameters()) {
+            if (!seen.add(param)) {
+                throw new EvaluateException("Duplicate parameter name.", Optional.of(ast));
+            }
+        }
         if (scope.resolve(ast.name(), true).isPresent()) {
             throw new EvaluateException("Function already defined.", Optional.of(ast));
         }
@@ -68,9 +71,6 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                 Scope parameterScope = new Scope(definingScope);
                 for (int i = 0; i < ast.parameters().size(); i++) {
                     String paramName = ast.parameters().get(i);
-                    if (parameterScope.resolve(paramName, true).isPresent()) {
-                        throw new EvaluateException("Duplicate parameter name: " + paramName, Optional.of(ast));
-                    }
                     parameterScope.define(paramName, arguments.get(i));
                 }
 
@@ -126,10 +126,17 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
             throw new EvaluateException("Expression must be iterable", Optional.of(ast.expression()));
 
         for (var element : iterable) {
+
+            RuntimeValue wrapped =
+                element instanceof RuntimeValue rv ? rv : new RuntimeValue.Primitive(element);
+
+            if (wrapped instanceof RuntimeValue.Primitive p &&
+                p.value() instanceof Iterable<?>)
+                throw new EvaluateException("Invalid iterable element.", Optional.of(ast));
+
             Scope iterationScope = new Scope(scope);
-            // double check //
-            RuntimeValue checkedRuntime = element instanceof  RuntimeValue r ? r: new RuntimeValue.Primitive(element);
-            iterationScope.define(ast.name(), checkedRuntime);
+            iterationScope.define(ast.name(), wrapped);
+
             Scope bodyScope = new Scope(iterationScope);
             Scope previous = this.scope;
             this.scope = bodyScope;
@@ -141,6 +148,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                 this.scope = previous;
             }
         }
+
         return new RuntimeValue.Primitive(null);
     }
 
@@ -184,14 +192,25 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
         } else if (ast.expression() instanceof Ast.Expr.Property property) {
             RuntimeValue receiverValue = visit(property.receiver());
             var object = requireType(receiverValue, RuntimeValue.ObjectValue.class)
-                .orElseThrow(() -> new EvaluateException("Receiver is not an object.", Optional.of(property.receiver())));;
-
-            if (object.scope().resolve(property.name(), true).isEmpty()) {
+                .orElseThrow(() -> new EvaluateException("Receiver is not an object.", Optional.of(property.receiver())));
+            RuntimeValue.ObjectValue current = object;
+            Scope neededscope = null;
+            while (true) {
+                if (current.scope().resolve(property.name(), true).isPresent()) {
+                    neededscope = current.scope();
+                    break;
+                }
+                var proto = current.scope().resolve("prototype", true);
+                if (proto.isEmpty()) break;
+                if (!(proto.get() instanceof RuntimeValue.ObjectValue p)) break;
+                current = p;
+            }
+            if (neededscope == null) {
                 throw new EvaluateException("Property '" + property.name() + "' not defined in object.",
                     Optional.of(ast.expression()));
             }
             RuntimeValue right = visit(ast.value());
-            object.scope().assign(property.name(), right);
+            neededscope.assign(property.name(), right);
             return right;
         } else {
             throw new EvaluateException("Invalid assignment target.", Optional.of(ast.expression()));
@@ -309,10 +328,6 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                         throw new EvaluateException("Division by zero.", Optional.of(ast.right()));
 
                     var quotient = dividend.divide(divisor);
-                    var remainder = dividend.remainder(divisor);
-                    if (!remainder.equals(BigInteger.ZERO) && (dividend.signum() ^ divisor.signum()) < 0) {
-                        quotient = quotient.subtract(BigInteger.ONE);
-                    }
                     return new RuntimeValue.Primitive(quotient);
                 }
 
@@ -346,88 +361,103 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
             case "<": {
                 var left = visit(ast.left());
-                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
+
+                var right = visit(ast.right());
+
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
+
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison < 0);
             }
             case "<=": {
                 var left = visit(ast.left());
-                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
+
+                var right = visit(ast.right());
+
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
+
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison <= 0);
             }
+
             case ">": {
                 var left = visit(ast.left());
-                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
+
+                var right = visit(ast.right());
+
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
+
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison > 0);
             }
+
             case ">=": {
                 var left = visit(ast.left());
-                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
+
+                var right = visit(ast.right());
+
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
+
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison >= 0);
             }
+
             case "AND": {
                 var left = visit(ast.left());
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
@@ -584,6 +614,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
     public RuntimeValue visit(Ast.Expr.ObjectExpr ast) throws EvaluateException {
         var object = new RuntimeValue.ObjectValue(ast.name(), new Scope(scope));
         final Scope definingScope = object.scope();
+        Scope objectParent = scope;
         Scope previous = this.scope;
         this.scope = object.scope();
         try {
@@ -591,9 +622,22 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                 if (definingScope.resolve(letstmt.name(), true).isPresent()) {
                     throw new EvaluateException("Field already defined.", Optional.of(letstmt));
                 }
-                visit(letstmt);
+                RuntimeValue value = letstmt.value().isPresent()
+                    ? visit(letstmt.value().get())
+                    : new RuntimeValue.Primitive(null);
+
+                definingScope.define(letstmt.name(), value);
             }
             for (var defstmt : ast.methods()) {
+                if (defstmt.parameters().contains("this")) {
+                    throw new EvaluateException("Cannot use 'this' as parameter name", Optional.of(defstmt));
+                }
+                var seen = new HashSet<String>();
+                for (String param : defstmt.parameters()) {
+                    if (!seen.add(param)) {
+                        throw new EvaluateException("Duplicate parameter name.", Optional.of(defstmt));
+                    }
+                }
                 if (definingScope.resolve(defstmt.name(), true).isPresent()) {
                     throw new EvaluateException("Function already defined.", Optional.of(defstmt));
                 }
@@ -602,16 +646,10 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                         if (arguments.size() != defstmt.parameters().size() + 1) {
                             throw new EvaluateException("Argument count mismatch.", Optional.of(defstmt));
                         }
-                        Scope parameterScope = new Scope(definingScope);
-                        if (defstmt.parameters().contains("this")) {
-                            throw new EvaluateException("Cannot use 'this' as parameter name", Optional.of(defstmt));
-                        }
+                        Scope parameterScope = new Scope(objectParent);
                         parameterScope.define("this", arguments.get(0));
                         for (int i = 0; i < defstmt.parameters().size(); i++) {
                             String paramName = defstmt.parameters().get(i);
-                            if (parameterScope.resolve(paramName, true).isPresent()) {
-                                throw new EvaluateException("Duplicate parameter name: " + paramName, Optional.of(defstmt));
-                            }
                             parameterScope.define(paramName, arguments.get(i+1));
                         }
 
