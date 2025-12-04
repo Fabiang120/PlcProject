@@ -1,7 +1,5 @@
 package plc.project.parser;
 
-import org.jspecify.annotations.Nullable;
-
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -69,7 +67,7 @@ public sealed interface Ast {
     sealed interface Expr extends Ast {
 
         record Literal(
-            @Nullable Object value
+            Object value
         ) implements Expr {
             @Override
             public String toString() {

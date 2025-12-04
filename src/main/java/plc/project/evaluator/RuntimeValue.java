@@ -1,7 +1,5 @@
 package plc.project.evaluator;
 
-import org.jspecify.annotations.Nullable;
-
 import java.util.List;
 import java.util.Optional;
 
@@ -11,7 +9,7 @@ import java.util.Optional;
 public sealed interface RuntimeValue {
 
     record Primitive(
-        @Nullable Object value
+        Object value
     ) implements RuntimeValue {
 
         @Override

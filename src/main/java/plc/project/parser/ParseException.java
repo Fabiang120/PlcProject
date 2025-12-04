@@ -12,7 +12,7 @@ public final class ParseException extends Exception {
     private final Optional<Token> token;
 
     public ParseException(String message, Optional<Token> token) {
-        super(message);
+        super(message + "\n - @ token " + token.map(Token::literal).orElse("<EOF>"));
         this.token = token;
     }
 

@@ -77,6 +77,14 @@ public final class Parser {
         }
         String name = tokens.get(-1).literal();
 
+        Optional<String> type = Optional.empty();
+        if (tokens.match(":")) {
+            if (!tokens.match(Token.Type.IDENTIFIER)) {
+                throw new ParseException("Expected type after ':'", tokens.getNext());
+            }
+            type = Optional.of(tokens.get(-1).literal());
+        }
+
         Optional<Ast.Expr> expr1 = Optional.empty();
 
         if (tokens.match("=")) {
@@ -86,12 +94,11 @@ public final class Parser {
         if(!tokens.match(";")){
             throw new ParseException("Expected 'SEMICOLON' at end of LET", tokens.getNext());
         }
-        return new Ast.Stmt.Let(name,expr1);
+        return new Ast.Stmt.Let(name,type,expr1);
     }
 
     private Ast.Stmt parseDefStmt() throws ParseException {
         tokens.match("DEF");
-
 
         if(!tokens.match(Token.Type.IDENTIFIER)){
             throw new ParseException("Expected 'IDENTIFER' after DEF", tokens.getNext());
@@ -102,21 +109,49 @@ public final class Parser {
             throw new ParseException("Expected '(' after DEF", tokens.getNext());
         }
 
-
         List<String> statements1 = new ArrayList<>();
+        List<Optional<String>> parameterTypes = new ArrayList<>();
+
         if (tokens.match(Token.Type.IDENTIFIER)) {
             statements1.add(tokens.get(-1).literal());
+
+            if(tokens.match(":")){
+                if(!tokens.match(Token.Type.IDENTIFIER)){
+                    throw new ParseException("Expected type after ':'", tokens.getNext());
+                }
+                parameterTypes.add(Optional.of(tokens.get(-1).literal()));
+            }else{
+                parameterTypes.add(Optional.empty());
+            }
+
             while (tokens.has(0) && tokens.match(",")) {
                 if (!tokens.match(Token.Type.IDENTIFIER)) {
                     throw new ParseException("Expected identifier after ',' in parameter list", tokens.getNext());
                 }
+
                 statements1.add(tokens.get(-1).literal());
+
+                if (tokens.match(":")) {
+                    if (!tokens.match(Token.Type.IDENTIFIER)) {
+                        throw new ParseException("Expected type after ':'", tokens.getNext());
+                    }
+                    parameterTypes.add(Optional.of(tokens.get(-1).literal()));
+                }else{
+                    parameterTypes.add(Optional.empty());
+                }
             }
         }
 
-
         if(!tokens.match(")")){
             throw new ParseException("Expected ')' after Identifer", tokens.getNext());
+        }
+
+        Optional<String> return_type = Optional.empty();
+        if (tokens.match(":")) {
+            if (!tokens.match(Token.Type.IDENTIFIER)) {
+                throw new ParseException("Expected type after ':'", tokens.getNext());
+            }
+            return_type = Optional.of(tokens.get(-1).literal());
         }
 
         if(!tokens.match("DO")){
@@ -131,7 +166,7 @@ public final class Parser {
         if(!tokens.match("END")){
             throw new ParseException("Expected 'END' after DO", tokens.getNext());
         }
-        return new Ast.Stmt.Def(name, statements1, statements2);
+        return new Ast.Stmt.Def(name, statements1, parameterTypes,return_type,statements2);
     }
 
     private Ast.Stmt parseIfStmt() throws ParseException {
