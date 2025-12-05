@@ -263,7 +263,7 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                         Optional.of(ast.left()));
                 }
 
-                throw new EvaluateException("Operands of + must be String, BigInteger, or BigDecimal",
+                throw new EvaluateException("Operands of + must match",
                     Optional.of(ast.right()));
             }
 
@@ -328,6 +328,10 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                         throw new EvaluateException("Division by zero.", Optional.of(ast.right()));
 
                     var quotient = dividend.divide(divisor);
+                    var remainder = dividend.remainder(divisor);
+                    if (!remainder.equals(BigInteger.ZERO) && (dividend.signum() ^ divisor.signum()) < 0) {
+                        quotient = quotient.subtract(BigInteger.ONE);
+                    }
                     return new RuntimeValue.Primitive(quotient);
                 }
 
@@ -361,103 +365,88 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
 
             case "<": {
                 var left = visit(ast.left());
+                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
-
-                var right = visit(ast.right());
-
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
-
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison < 0);
             }
             case "<=": {
                 var left = visit(ast.left());
+                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
-
-                var right = visit(ast.right());
-
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
-
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison <= 0);
             }
-
             case ">": {
                 var left = visit(ast.left());
+                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
-
-                var right = visit(ast.right());
-
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
-
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison > 0);
             }
-
             case ">=": {
                 var left = visit(ast.left());
+                var right = visit(ast.right());
 
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Left must be a primitive.", Optional.of(ast.left())));
 
-                if(!(leftValue instanceof Comparable<?> comparableLeft)){
-                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
-                }
-
-                var right = visit(ast.right());
-
                 var rightValue = requireType(right, RuntimeValue.Primitive.class)
                     .map(RuntimeValue.Primitive::value)
                     .orElseThrow(() -> new EvaluateException("Right must be a primitive.", Optional.of(ast.right())));
 
+                if(!(leftValue instanceof Comparable<?> comparableLeft)){
+                    throw new EvaluateException("Left must be a comparable", Optional.of(ast.left()));
+                }
                 if(!(leftValue.getClass()).equals(rightValue.getClass())){
                     throw new EvaluateException("Operands must be of the same type", Optional.of(ast.right()));
                 }
-
                 int comparison = ((Comparable) leftValue).compareTo(rightValue);
                 return new RuntimeValue.Primitive(comparison >= 0);
             }
-
             case "AND": {
                 var left = visit(ast.left());
                 var leftValue = requireType(left, RuntimeValue.Primitive.class)
@@ -516,7 +505,6 @@ public final class Evaluator implements Ast.Visitor<RuntimeValue, EvaluateExcept
                     );
         }
     }
-
     @Override
     public RuntimeValue visit(Ast.Expr.Variable ast) throws EvaluateException {
         Optional<RuntimeValue> value = scope.resolve(ast.name(), false);
