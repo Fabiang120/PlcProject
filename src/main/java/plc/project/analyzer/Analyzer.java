@@ -91,7 +91,7 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Stmt.Def visit(Ast.Stmt.Def ast) throws AnalyzeException {
-        if (scope.resolve(ast.name(), false).isPresent()) {
+        if (scope.resolve(ast.name(), true).isPresent()) {
             throw new AnalyzeException("Function already defined.", Optional.of(ast));
         }
 
@@ -122,7 +122,14 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
         scope = new Scope(previous);
 
         for (int i = 0; i < ast.parameters().size(); i++) {
-            scope.define(ast.parameters().get(i), paramTypes.get(i));
+            String parameter = ast.parameters().get(i);
+            if(scope.resolve(parameter, true).isPresent()) {
+                throw new AnalyzeException(
+                    "Parameter '" + parameter + "' is already defined in this scope.",
+                    Optional.of(ast)
+                );
+            }
+            scope.define(parameter, paramTypes.get(i));
         }
 
         scope.define("$RETURN", returnType);
@@ -385,6 +392,9 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
     }
 
     private Type analyzeBoolean(Type left, Type right, Ast.Expr.Binary ast) throws AnalyzeException {
+        if (left.equals(Type.DYNAMIC) || right.equals(Type.DYNAMIC)) {
+            return Type.DYNAMIC;
+        }
         if(!left.equals(Type.BOOLEAN)) {
             throw new AnalyzeException("Operands must be boolean", Optional.of(ast.left()));
         }
@@ -394,9 +404,26 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
         return Type.BOOLEAN;
     }
 
-
     @Override
     public Ir.Expr.Variable visit(Ast.Expr.Variable ast) throws AnalyzeException {
+        boolean insideObject = scope.resolve("this", false).isPresent();
+        if(insideObject){
+            Optional<Type> within = scope.resolve(ast.name(), true);
+            if (within.isPresent()) {
+                return new Ir.Expr.Variable(ast.name(), within.get());
+            }
+            Type thisType = scope.resolve("this", false).get();
+            Type.ObjectType objectType = (Type.ObjectType) thisType;
+            Optional<Type> field = objectType.scope().resolve(ast.name(), true);
+            if (field.isPresent()) {
+                throw new AnalyzeException(
+                    "Direct field access requires 'this.'",
+                    Optional.of(ast)
+                );
+            }
+            throw new AnalyzeException("Variable undefined", Optional.of(ast));
+        }
+
         var type = scope.resolve(ast.name(), false)
             .orElseThrow(() -> new AnalyzeException("Variable undefined", Optional.of(ast)));
         return new Ir.Expr.Variable(ast.name(), type);
@@ -466,27 +493,32 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
             propertyType = object_ins.scope().resolve(ast.name(), true)
                 .orElseThrow(() -> new AnalyzeException("Property not found", Optional.of(ast)));
         } else if (receiver_type == Type.DYNAMIC) {
-            propertyType = Type.DYNAMIC;
+            List<Ir.Expr> args = new ArrayList<>();
+            for (Ast.Expr a : ast.arguments()) {
+                args.add(visit(a));
+            }
+            return new Ir.Expr.Method(receiver, ast.name(), args, Type.DYNAMIC);
         } else {
             throw new AnalyzeException("Invalid property receiver",
                 Optional.of(ast.receiver()));
         }
+        if (!(propertyType instanceof Type.Function function)) {
+            throw new AnalyzeException("Property is not a function", Optional.of(ast));
+        }
+
         List<Ir.Expr> arguments = new ArrayList<>();
         for(Ast.Expr argument : ast.arguments()){
             arguments.add(visit(argument));
         }
-        if(propertyType instanceof Type.Function function){
-            if(function.parameters().size() != arguments.size()){
-                throw new AnalyzeException("Arguments don't match" + ast.name(), Optional.of(ast));
-            }
-            for (int i = 0; i < arguments.size(); i++) {
-                if (!Environment.isSubtypeOf(arguments.get(i).type(), function.parameters().get(i))) {
-                    throw new AnalyzeException("Argument type mismatch", Optional.of(ast.arguments().get(i)));
-                }
-            }
-            return new Ir.Expr.Method(receiver, ast.name(), arguments, function.returns());
+        if(function.parameters().size() != arguments.size()){
+            throw new AnalyzeException("Arguments don't match" + ast.name(), Optional.of(ast));
         }
-        return new Ir.Expr.Method(receiver,ast.name(), arguments, Type.DYNAMIC);
+        for (int i = 0; i < arguments.size(); i++) {
+            if (!Environment.isSubtypeOf(arguments.get(i).type(), function.parameters().get(i))) {
+                throw new AnalyzeException("Argument type mismatch", Optional.of(ast.arguments().get(i)));
+            }
+        }
+        return new Ir.Expr.Method(receiver, ast.name(), arguments, function.returns());
     }
 
     @Override
@@ -571,6 +603,13 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
                 scope.define("this", object_type);
 
                 for (int i = 0; i < defstmt.parameters().size(); i++) {
+                    String paramName = defstmt.parameters().get(i);
+                    if (scope.resolve(paramName, true).isPresent()) {
+                        throw new AnalyzeException(
+                            "Parameter '" + paramName + "' is already defined in this scope.",
+                            Optional.of(defstmt)
+                        );
+                    }
                     scope.define(defstmt.parameters().get(i), paramTypes.get(i));
                 }
                 scope.define("$RETURN", returnType);
@@ -588,6 +627,6 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
             this.scope = previous;
         }
 
-        return new Ir.Expr.ObjectExpr(Optional.empty(), lets, defs, object_type);
+        return new Ir.Expr.ObjectExpr(ast.name(), lets, defs, object_type);
     }
 }

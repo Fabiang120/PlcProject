@@ -33,7 +33,7 @@ public final class Main {
         void evaluate(String input) throws LexException, ParseException, EvaluateException, AnalyzeException;
     }
 
-    private static final Repl REPL = Main::analyzer; //edit for manual testing
+    private static final Repl REPL = Main::generator; //edit for manual testing
 
     public static void main(String[] args) {
         while (true) {
