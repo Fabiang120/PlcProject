@@ -40,7 +40,7 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Stmt.Let visit(Ast.Stmt.Let ast) throws AnalyzeException {
-        if (scope.resolve(ast.name(), false).isPresent()) {
+        if (scope.resolve(ast.name(), true).isPresent()) {
             throw new AnalyzeException(
                 "Variable '" + ast.name() + "' is already defined in this scope.",
                 Optional.of(ast)
@@ -198,7 +198,7 @@ public final class Analyzer implements Ast.Visitor<Ir, AnalyzeException> {
 
     @Override
     public Ir.Stmt.Return visit(Ast.Stmt.Return ast) throws AnalyzeException {
-        Type inside = scope.resolve("$RETURN", true)
+        Type inside = scope.resolve("$RETURN", false)
             .orElseThrow(() -> new AnalyzeException("RETURN outside function", Optional.of(ast)));
 
         Optional<Ir.Expr> valueIr = ast.value().isPresent()
